@@ -5,6 +5,7 @@ from rich.logging import RichHandler
 from typing import Counter, DefaultDict, List, Tuple
 from collections import Counter, defaultdict
 import itertools
+from math import sqrt, nan
 
 from agents import Agent, CharacterAgent, EvaluationAgent, conjunction
 from characters import Character, devset as dev_chars
@@ -31,54 +32,84 @@ default_judge = Character("Judge Wise", [],   # an external observer who is ANSW
 class Eval():
     """Aggregated results from one or more dialogue evaluations.
 
-    We track the mean score on each numerical question (ignoring missing values),
-    and the list of long-form comments for each free-form question.
+    We track the mean and variance of the score on each numerical question
+    (ignoring any missing values), and the list of long-form comments for each
+    free-form question.
     
-    This class is boring from an NLP point of view -- just a utility class.
+    This class is boring from an NLP point of view -- just a utility class. 
     But it is reasonably general; it could handle other questions.
     """
-    scores: Counter[str]     # total score on each criterion
-    denoms: Counter[str]     # number of scores contributing to the total, for each criterion   
+    n: int                        # number of dialogues whose evaluations are recorded here; used only for reporting
+    scores: Counter[str]          # total score on each criterion
+    counts: Counter[str]          # number of scores contributing to each total   
+    squared_scores: Counter[str]  # total squared score on each criterion
     comments: DefaultDict[str, List[Tuple[str,str]]]  # list of (evaluator,comment) pairs for each long-form question
 
     def __init__(self,
                  comments: dict[str,List[Tuple[str,str]]] = {},    
-                 scores: dict[str,int] | None = None,
-                 denoms: dict[str,int] | None = None,
-                 n: int = 1        
+                 scores: dict[str,int] = {},
+                 ### Remaining arguments are for internal calls only
+                 n: int = 1,
+                 counts: dict[str,int] | None = None,
+                 squared_scores: dict[str,int] | None = None,
                 ) -> None: 
         self.comments = defaultdict(list)
         for key, val in comments.items():
             self.comments[key] = val
 
         self.scores = Counter(scores)
+        self.n = n
 
-        if denoms is None:
-            denoms = {key: 1 for key in self.scores}
-        self.denoms = Counter(denoms)
-        if set(self.scores.keys()) != set(self.denoms.keys()):
-            raise ValueError(f"scores and denoms have different sets of keys: {scores}, {denoms}")
+        if counts is None:
+            counts = {key: n for key in self.scores}
+        self.counts = Counter(counts)
+        
+        if squared_scores is None:
+            assert n <= 1    # must square the individual scores, not sums of scores
+            squared_scores = {k: v**2 for k,v in scores.items()}
+        self.squared_scores = Counter(squared_scores)
+
+        assert set(scores.keys()) == set(counts.keys())
+        assert set(scores.keys()) == set(squared_scores.keys())
+
             
     def mean(self) -> dict[str,float]:
-        m = {k: self.scores[k]/self.denoms[k] for k in self.scores}
-        m['TOTAL'] = sum(m.values())
-        return m
-            
-    def __repr__(self) -> str:         
-        count = max(self.denoms.values())
+        """Returns a dictionary with the mean score on each crtierion."""
+        return {k: self.scores[k]/self.counts[k] for k in self.scores}
+    
+    def sd(self) -> dict[str,float]:
+        """Returns a dictionary with the sample standard deviation on each crtierion."""
+        return {k: (nan if self.counts[k] <= 1
+                    else sqrt((self.squared_scores[k] - self.scores[k]**2 / self.counts[k]) 
+                              / (self.counts[k]-1)))
+                for k in self.scores}
+                
+    def __len__(self) -> int:   # the len() function
+        return self.n
         
+    def __repr__(self) -> str:        
         allcomments = [f"Comments from {question} question:\n"
                         + '\n'.join(f"({c[0]}) {c[1]}" for c in commentlist)
                         for question, commentlist in self.comments.items()]
-        
-        return (f"<Eval of ≈ {count} dialogues:\n{repr(self.mean())}\n\n"
-                + '\n\n'.join(allcomments))
+        if allcomments:
+            commentstring = '\n\n' + '\n\n'.join(allcomments)
+        else:
+            commentstring = ''
+      
+        if len(self) == 1:
+            return (f"<Eval of 1 dialogue: {repr(self.mean())}>{commentstring}")
+        else:        
+            # TODO: print fewer decimal digits
+            return (f"<Eval of {len(self)} dialogues: {repr(self.mean())}>"
+                    f"\nStandard deviations: {repr(self.sd())}{commentstring}")
         
     def __iadd__(self, other: Eval) -> Eval:   # the += operator
         if not isinstance(other, Eval):
             raise ValueError(f"Can only add Evals to Evals, but got {type(other)}")
         self.scores += other.scores     # sum Counter dictionaries
-        self.denoms += other.denoms
+        self.n += other.n
+        self.counts += other.counts
+        self.squared_scores += other.squared_scores 
         for key, val in other.comments.items():
             self.comments[key] += val   # destructively append lists
         return self
@@ -89,9 +120,11 @@ class Eval():
         comments = defaultdict(list)  # collect all comments here
         for key, val in itertools.chain(self.comments.items(), other.comments.items()):
             comments[key] += val   # append lists
-        return Eval(comments,
-                    self.scores + other.scores,
-                    self.denoms + other.denoms)
+        return Eval(comments = comments,
+                    scores = self.scores + other.scores,
+                    n = self.n + other.n,
+                    counts = self.counts + other.counts,
+                    squared_scores = self.squared_scores + other.squared_scores)      
 
 
 # The prompt text is hardcoded into the two top-level functions below and the
@@ -107,24 +140,24 @@ class Eval():
 # Separate issue with the evaluation design:
 # 
 # Unfortunately, in the functions below, the instructions and the dialogue
-# reveal the `other` participant's real name.  What the evaluator gives Airhead
-# a lower rating just because it's named Airhead?  Or gives Aragorn a higher
-# rating just because the evaluator is an LOTR fan?
+# reveal the evaluee's real name.  What the evaluator gives Airhead a lower
+# rating just because it's named Airhead?  Or gives Aragorn a higher rating just
+# because the evaluator is an LOTR fan?
 # 
 # We want the evaluator to focus on the _content_ of the dialogue and not be
-# unfairly biased by the argubot's name.  So we should really replace `other` by
-# a standard pseudonym throughout the prompt.  But we skipped this step for the
-# homework because it would make the log messages harder for you to read.
+# unfairly biased by the evaluee's name.  So we should really replace the latter
+# by a standard pseudonym throughout the prompt.  But we skipped this step for
+# the homework because it would make the log messages harder for you to read.
 
 def eval_by_participant(participant: Character,
-                        other: str, dialogue: Dialogue) -> Eval:
+                        evaluee: str, dialogue: Dialogue) -> Eval:
     """Ask a `participant` from this `dialogue` what they now feel about 
-    the `other` participant (who is usually an argubot).  Inside this method,
+    the `evaluee` participant (who is usually an argubot).  Inside this method,
     we will instruct `participant` by turning them into an `EvaluationAgent`."""
     name = participant.name
     speakers = {turn['speaker'] for turn in dialogue}
-    if not {name, other} <= {turn['speaker'] for turn in dialogue}:
-        raise ValueError(f"{name} and {other} did not both participate in dialogue")
+    if not {name, evaluee} <= {turn['speaker'] for turn in dialogue}:
+        raise ValueError(f"{name} and {evaluee} did not both participate in dialogue")
 
     # We're going to start a new dialogue, `d`, with `agent`, to discuss
     # the existing `dialogue`.
@@ -138,8 +171,8 @@ def eval_by_participant(participant: Character,
     warmup = (f"Hello {name}!  Here is a conversation that you had "
               f"with {conjunction(speakers - {name}, zeroval='yourself')}."
               f"\n\n{dialogue.script()}"
-              f"\n\nWhat did {other} disagree with you about? How did the conversation go, in your opinion? "
-              f"Where could {other} have done better?")
+              f"\n\nWhat did {evaluee} disagree with you about? How did the conversation go, in your opinion? "
+              f"Where could {evaluee} have done better?")
     d = agent.ask(d, research_team, warmup)
     comments = {'overview': [(participant.name, d[-1]['content'])]}
     
@@ -149,20 +182,20 @@ def eval_by_participant(participant: Character,
     # (That's easier to arrange with simulated humans than with real ones!)
     
     scores = {}
-    question = f"Did {other} listen carefully to you and engage with what you were saying?"
+    question = f"Did {evaluee} listen carefully to you and engage with what you were saying?"
     try: scores['engaged'] = agent.rating(d, research_team, question, 1, 5)  
     except ValueError: pass   # will happen if LLM didn't return an integer in the range 1-5
 
     for quality in ['informed', 'intelligent', 'moral']:
-        question = f"Do you think that people who think like {other} about that topic are {quality}?"
+        question = f"Do you think that people who think like {evaluee} about that topic are {quality}?"
         try: scores[quality] = agent.rating(d, research_team, question, 1, 5)  
         except ValueError: pass
         
     return Eval(comments, scores)
 
 
-def eval_by_observer(observer: Character, other: str, dialogue: Dialogue) -> Eval:
-    """Ask an external observer what they thought about the participant `other` 
+def eval_by_observer(observer: Character, evaluee: str, dialogue: Dialogue) -> Eval:
+    """Ask an external observer what they thought about the participant `evaluee` 
     in the given `dialogue` (who is usually an argubot).  Inside this method,
     we will instruct `observer` by turning them into an `EvaluationAgent`."""
     
@@ -175,18 +208,36 @@ def eval_by_observer(observer: Character, other: str, dialogue: Dialogue) -> Eva
     agent = EvaluationAgent(observer)
     warmup = (f"Here is a conversation that you observed among {conjunction(speakers)}."
                f"\n\n{dialogue.script()}"
-               f"\n\n{other} was trying to make this a constructive converation, "
-               f"and to help {conjunction(speakers - {other}, zeroval='themself')} appreciate other points of view. " 
-               f"What new perspectives did {other} offer to them?  Was this successful?") 
+               f"\n\n{evaluee} was trying to make this a constructive converation, "
+               f"and to help {conjunction(speakers - {evaluee}, zeroval='themself')} appreciate other points of view. " 
+               f"What new perspectives did {evaluee} offer to them?  Was this successful?") 
     d = agent.ask(d, research_team, warmup)
     comments = {'mindopening': [(observer.name, d[-1]['content'])]}
     
     scores = {}
-    question = f"How skilled is {other} at helping others become more open-minded?"
+    question = f"How skilled is {evaluee} at helping others become more open-minded?"
     try: scores['skilled'] = agent.rating(d, research_team, question, 1, 10)
     except ValueError: pass
     
     return Eval(comments, scores)
+
+def eval_dialogue(participant: Character,
+                  evaluee: str, judge: Character, 
+                  dialogue: Dialogue) -> Eval:
+    """Combines `eval_by_particpant` and `eval_by_observer` into 
+    a single Eval that also includes a summary score."""
+    e = (eval_by_participant(participant, evaluee, dialogue)  # creates EvaluationAgent(participant)
+         + eval_by_observer(judge, evaluee, dialogue))        # creates EvaluationAgent(judge)
+
+    # Simply add all the scores to get a summary score.
+    # In real life, this might be a WEIGHTED sum.
+    total = sum(e.scores.values())   
+    e += Eval(scores={'TOTAL': total})
+
+    assert e.n == 3   # we summed 3 evals so e thinks there were 3 dialogues (maybe we should have specified n=1/3 for each!)
+    e.n = 1           # but actually they all came from the same dialogue 
+    return e
+    
         
         
 # We'll store the expensively generated raw data in dictionaries, rather than
@@ -217,7 +268,7 @@ def eval_on_characters(argubot: Agent,
     if argubot.name in saved_dialogues: del saved_dialogues[argubot.name]
     if argubot.name in saved_evalsum:   del saved_evalsum[argubot.name]
     de_list = []
-    e_sum   = Eval()
+    e_sum   = Eval(n=0)   # empty set
     starting_cost = read_usage()['cost']
 
     # Do the eval.
@@ -228,8 +279,7 @@ def eval_on_characters(argubot: Agent,
             log.info(d)   # show the final dialogue
             
             # evaluate its behavior
-            e = (eval_by_participant(char, argubot.name, d)  # creates EvaluationAgent(char)
-                 + eval_by_observer(judge, argubot.name, d)) # creates EvaluationAgent(judge)
+            e = eval_dialogue(char, argubot.name, judge, d)
             log.info(e)   # show the result of evaluation
             
             # add to the growing local record

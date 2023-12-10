@@ -99,7 +99,7 @@ def _merge_usage(u1: Usage, u2: Usage) -> Usage:
     return {k: u1.get(k, 0) + u2.get(k, 0) for k in itertools.chain(u1,u2)}
     
 # Make a tracked client object that everyone can use, as a convenience.
-dotenv.load_dotenv()                           # set environment variable OPENAI_API_KEY from .env
+dotenv.load_dotenv(override=True)              # set environment variable OPENAI_API_KEY from .env
 default_client = track_usage(openai.OpenAI())  # create a client and modify it so that it will store its usage in a local file 
     
 if __name__ == "__main__":

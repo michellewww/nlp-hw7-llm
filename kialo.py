@@ -81,7 +81,7 @@ class Kialo:
         index: Dict[str, Kialo.Claim] = {}   # map claim id to actual claim; ids will be discarded after reading file
         metadata_re = re.compile('(((\\d+\\.)*)\\d+.)\\s+(Thesis|Pro|Con):')  # matches metadata format
         xref_re = re.compile('-> See ((\\d+\\.)+)')                           # matches cross-reference format
-        with open(filename) as f:
+        with open(filename, encoding='utf-8') as f:
             id, id_parent, polarity = None, None, None   # vars maintained throughout loop below
             for line in f:
                 line = line.strip()                      # remove leading and trailing whitespace

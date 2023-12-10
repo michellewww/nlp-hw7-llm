@@ -31,3 +31,10 @@ def simulated_dialogue(a: Agent, b: Agent, turns: int = 6, *,
         a, b = b, a   # switch roles
     return d
 
+
+# Remark: It would be fun to simulate a dialogue among more than two agents. 
+# But then you need a protocol for deciding who gets to take the next turn!  
+# An orderly rotation?  A random choice?  Or each speaker ends their turn by
+# choosing the next speaker? Or they all get to speak at once, and then we
+# prompt the LLM to tell us whose version was the best continuation of the
+# dialogue? 

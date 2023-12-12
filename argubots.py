@@ -75,48 +75,50 @@ akiko = KialoAgent("Akiko", Kialo(glob.glob("data/*.txt")))   # get the Kialo da
 
 ###########################################
 # Define your own additional argubots here!
-###########################################
+###########################################  
 class AkikiAgent(Agent):
     """ AkikiAgent subclasses the Agent class. It responds by looking back 3 dialogues and
     weighting more recent turns heavier than earlier turns. It uses a Kialo database."""
-    
+
     def __init__(self, name: str, kialo: Kialo):
         self.name = name
         self.kialo = kialo
-                
+
     def response(self, d: Dialogue) -> str:
         if len(d) == 0:
             claim = self.kialo.random_chain()[0]
         else:
             # Look back 3 dialogues or as many as available
             num_dialogues_to_look_back = min(3, len(d) - 1)
-            recent_turns = [d[-i-1]['content'] for i in range(num_dialogues_to_look_back)]
-            
+
+            # Separate human turns and Akiki's turns
+            human_turns = [d[-i-1]['content'] for i in range(num_dialogues_to_look_back) if d[-i-1]['speaker'] != "Akiki"]
+            akiki_turns = [d[-i-1]['content'] for i in range(num_dialogues_to_look_back) if d[-i-1]['speaker'] == "Akiki"]
+
+            # Adjust weights based on whether it's a human turn or Akiki's turn
+            if not akiki_turns:  # If no Akiki turns found, consider it's a human turn
+                weights = [4, 3, 2]  # Adjust weights for human turns
+                recent_turns = human_turns
+            else:
+                weights = [3, 2, 1]  # Adjust weights for Akiki's turns
+                recent_turns = akiki_turns
+
             # Weight more recent turns heavier than earlier turns
-            weights = [3, 2, 1]  # Adjust weights based on preference
             weighted_turns = [turn * weight for turn, weight in zip(recent_turns, weights)]
-            
+
             # Combine the weighted turns to form the input for similarity comparison
             input_text = ' '.join(weighted_turns)
 
-
-            
             # Pick one of the top-3 most similar claims in the Kialo database,
             # restricting to the ones that list "con" arguments (counterarguments).
             neighbors = self.kialo.closest_claims(input_text, n=3, kind='has_cons')
             assert neighbors, "No claims to choose from; is Kialo data structure empty?"
             neighbor = random.choice(neighbors)
             log.info(f"[black on bright_green]Chose similar claim from Kialo:\n{neighbor}[/black on bright_green]")
-                        
+
             # Choose one of its "con" arguments as our response.
             claim = random.choice(self.kialo.cons[neighbor])
-        
-        return claim    
 
-# Instantiate AkikiAgent
-akiki = AkikiAgent("Akiki", Kialo(glob.glob("data/*.txt")))
-
-
-
+        return claim
 
 akiki = AkikiAgent("Akiki", Kialo(glob.glob("data/*.txt")))

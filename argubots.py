@@ -12,15 +12,15 @@ import glob
 from dialogue import Dialogue
 from agents import Agent, ConstantAgent, LLMAgent
 from kialo import Kialo
-from rank_bm25 import BM25Okapi as BM25_Index 
+from rank_bm25 import BM25Okapi as BM25_Index
 
 # Use the same logger as agents.py, since argubots are agents;
-# we split this file 
+# we split this file
 # You can change the logging level there.
-log = logging.getLogger("agents")    
+log = logging.getLogger("agents")
 
 #############################
-## Define some basic argubots
+# Define some basic argubots
 #############################
 
 # Airhead (aka Absentia or Acephalic) always says the same thing.
@@ -38,44 +38,49 @@ alice = LLMAgent("Alice",
                         "Answer in 1-2 sentences. Be thoughtful and polite.")
 
 ############################################################
-## Other argubot classes and instances -- add your own here! 
+# Other argubot classes and instances -- add your own here!
 ############################################################
+
 
 class KialoAgent(Agent):
     """ KialoAgent subclasses the Agent class. It responds with a relevant claim from
     a Kialo database.  No LLM is used."""
-    
+
     def __init__(self, name: str, kialo: Kialo):
         self.name = name
         self.kialo = kialo
-                
+
     def response(self, d: Dialogue) -> str:
 
-        if len(d) == 0:   
+        if len(d) == 0:
             # First turn.  Just start with a random claim from the Kialo database.
             claim = self.kialo.random_chain()[0]
         else:
             previous_turn = d[-1]['content']  # previous turn from user
             # Pick one of the top-3 most similar claims in the Kialo database,
             # restricting to the ones that list "con" arguments (counterarguments).
-            neighbors = self.kialo.closest_claims(previous_turn, n=3, kind='has_cons')
+            neighbors = self.kialo.closest_claims(
+                previous_turn, n=3, kind='has_cons')
             assert neighbors, "No claims to choose from; is Kialo data structure empty?"
             neighbor = random.choice(neighbors)
-            log.info(f"[black on bright_green]Chose similar claim from Kialo:\n{neighbor}[/black on bright_green]")
-            
+            log.info(
+                f"[black on bright_green]Chose similar claim from Kialo:\n{neighbor}[/black on bright_green]")
+
             # Choose one of its "con" arguments as our response.
             claim = random.choice(self.kialo.cons[neighbor])
-        
-        return claim    
-    
+
+        return claim
+
 # Akiko doesn't use an LLM, but looks up an argument in a database.
-  
-akiko = KialoAgent("Akiko", Kialo(glob.glob("data/*.txt")))   # get the Kialo database from text files
+
+
+# get the Kialo database from text files
+akiko = KialoAgent("Akiko", Kialo(glob.glob("data/*.txt")))
 
 
 ###########################################
 # Define your own additional argubots here!
-###########################################  
+###########################################
 class AkikiAgent(Agent):
     """ AkikiAgent subclasses the Agent class. It responds by looking back 3 dialogues and
     weighting more recent turns heavier than earlier turns. It uses a Kialo database."""
@@ -92,8 +97,10 @@ class AkikiAgent(Agent):
             num_dialogues_to_look_back = min(3, len(d) - 1)
 
             # Separate human turns and Akiki's turns
-            human_turns = [d[-i-1]['content'] for i in range(num_dialogues_to_look_back) if d[-i-1]['speaker'] != "Akiki"]
-            akiki_turns = [d[-i-1]['content'] for i in range(num_dialogues_to_look_back) if d[-i-1]['speaker'] == "Akiki"]
+            human_turns = [d[-i-1]['content']
+                           for i in range(num_dialogues_to_look_back) if d[-i-1]['speaker'] != "Akiki"]
+            akiki_turns = [d[-i-1]['content']
+                           for i in range(num_dialogues_to_look_back) if d[-i-1]['speaker'] == "Akiki"]
 
             # Adjust weights based on whether it's a human turn or Akiki's turn
             if not akiki_turns:  # If no Akiki turns found, consider it's a human turn
@@ -104,21 +111,81 @@ class AkikiAgent(Agent):
                 recent_turns = akiki_turns
 
             # Weight more recent turns heavier than earlier turns
-            weighted_turns = [turn * weight for turn, weight in zip(recent_turns, weights)]
+            weighted_turns = [turn * weight for turn,
+                              weight in zip(recent_turns, weights)]
 
             # Combine the weighted turns to form the input for similarity comparison
             input_text = ' '.join(weighted_turns)
 
             # Pick one of the top-3 most similar claims in the Kialo database,
             # restricting to the ones that list "con" arguments (counterarguments).
-            neighbors = self.kialo.closest_claims(input_text, n=3, kind='has_cons')
+            neighbors = self.kialo.closest_claims(
+                input_text, n=3, kind='has_cons')
             assert neighbors, "No claims to choose from; is Kialo data structure empty?"
             neighbor = random.choice(neighbors)
-            log.info(f"[black on bright_green]Chose similar claim from Kialo:\n{neighbor}[/black on bright_green]")
+            log.info(
+                f"[black on bright_green]Chose similar claim from Kialo:\n{neighbor}[/black on bright_green]")
 
             # Choose one of its "con" arguments as our response.
             claim = random.choice(self.kialo.cons[neighbor])
 
         return claim
 
+
 akiki = AkikiAgent("Akiki", Kialo(glob.glob("data/*.txt")))
+
+# aragorn
+
+
+class RAGAgent(Agent):
+    """ RAGAgent subclasses the Agent class. It responds by looking back 3 dialogues and
+    weighting more recent turns heavier than earlier turns. It uses a Kialo database."""
+
+    def __init__(self, name: str, kialo: Kialo):
+        self.name = name
+        self.kialo = kialo
+
+    def response(self, d: Dialogue) -> str:
+        if len(d) == 0:
+            claim = self.kialo.random_chain()[0]
+        else:
+            # Look back 3 dialogues or as many as available
+            num_dialogues_to_look_back = min(3, len(d) - 1)
+
+            # Separate human turns and Akiki's turns
+            human_turns = [d[-i-1]['content']
+                           for i in range(num_dialogues_to_look_back) if d[-i-1]['speaker'] != "Akiki"]
+            akiki_turns = [d[-i-1]['content']
+                           for i in range(num_dialogues_to_look_back) if d[-i-1]['speaker'] == "Akiki"]
+
+            # Adjust weights based on whether it's a human turn or Akiki's turn
+            if not akiki_turns:  # If no Akiki turns found, consider it's a human turn
+                weights = [4, 3, 2]  # Adjust weights for human turns
+                recent_turns = human_turns
+            else:
+                weights = [3, 2, 1]  # Adjust weights for Akiki's turns
+                recent_turns = akiki_turns
+
+            # Weight more recent turns heavier than earlier turns
+            weighted_turns = [turn * weight for turn,
+                              weight in zip(recent_turns, weights)]
+
+            # Combine the weighted turns to form the input for similarity comparison
+            input_text = ' '.join(weighted_turns)
+
+            # Pick one of the top-3 most similar claims in the Kialo database,
+            # restricting to the ones that list "con" arguments (counterarguments).
+            neighbors = self.kialo.closest_claims(
+                input_text, n=3, kind='has_cons')
+            assert neighbors, "No claims to choose from; is Kialo data structure empty?"
+            neighbor = random.choice(neighbors)
+            log.info(
+                f"[black on bright_green]Chose similar claim from Kialo:\n{neighbor}[/black on bright_green]")
+
+            # Choose one of its "con" arguments as our response.
+            claim = random.choice(self.kialo.cons[neighbor])
+
+        return claim
+
+
+aragorn = RAGAgent("Aragorn", Kialo(glob.glob("data/*.txt")))

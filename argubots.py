@@ -13,6 +13,9 @@ from dialogue import Dialogue
 from agents import Agent, ConstantAgent, LLMAgent
 from kialo import Kialo
 from rank_bm25 import BM25Okapi as BM25_Index
+from openai import OpenAI
+
+client = OpenAI()
 
 # Use the same logger as agents.py, since argubots are agents;
 # we split this file
@@ -189,3 +192,38 @@ class RAGAgent(Agent):
 
 
 aragorn = RAGAgent("Aragorn", Kialo(glob.glob("data/*.txt")))
+
+
+class RAGAgent_dense(Agent):
+    def __init__(self, name: str, kialo: Kialo):
+        self.name = name
+        self.kialo = kialo
+
+    def response(self, d: Dialogue) -> str:
+        if len(d) == 0:
+            # No context available, generate a random response or use default behavior
+            return "I don't have enough information to provide a response at the moment."
+        else:
+            # Collect recent turns from the dialogue
+            num_dialogues_to_look_back = min(3, len(d) - 1)
+            recent_turns = [d[-i-1]['content'] for i in range(num_dialogues_to_look_back)]
+
+            # Combine recent turns into a single string
+            input_text = ' '.join(recent_turns)
+
+            # Use the OpenAI ChatGPT API with the knowledge retrieval tool
+            response = client.beta.assistants.create(
+                model="gpt-4.0-turbo",
+                tools=["knowledge-retrieval"],
+                messages=[
+                    {"role": "system", "content": "You are a customer support chatbot. Use your knowledge base to best respond to customer queries."},
+                    {"role": "user", "content": input_text}
+                ]
+            )
+
+            # Extract the model-generated reply from the API response
+            reply = response['choices'][0]['message']['content']
+
+            return reply
+    
+rag_dense = RAGAgent_dense("Rag_dense", Kialo(glob.glob("data/*.txt")))
